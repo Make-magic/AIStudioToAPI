@@ -204,7 +204,7 @@ class RequestHandler {
         // Translate OpenAI format to Google format
         let googleBody;
         try {
-            googleBody = this.formatConverter.translateOpenAIToGoogle(req.body);
+            googleBody = await this.formatConverter.translateOpenAIToGoogle(req.body);
         } catch (error) {
             this.logger.error(`[Adapter] OpenAI request translation failed: ${error.message}`);
             return this._sendErrorResponse(

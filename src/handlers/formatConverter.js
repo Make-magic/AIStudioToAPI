@@ -6,6 +6,9 @@
  * Original Author: Ellinav
  */
 
+const axios = require("axios");
+const mime = require("mime-types");
+
 /**
  * Format Converter Module
  * Handles conversion between OpenAI and Google Gemini API formats
@@ -19,7 +22,7 @@ class FormatConverter {
     /**
      * Convert OpenAI request format to Google Gemini format
      */
-    translateOpenAIToGoogle(openaiBody) { // eslint-disable-line no-unused-vars
+    async translateOpenAIToGoogle(openaiBody) { // eslint-disable-line no-unused-vars
         this.logger.info("[Adapter] Starting translation of OpenAI request format to Google format...");
 
         let systemInstruction = null;
@@ -60,6 +63,30 @@ class FormatConverter {
                                     mimeType: match[1],
                                 },
                             });
+                        } else if (dataUrl.match(/^https?:\/\//)) {
+                            try {
+                                this.logger.info(`[Adapter] Downloading image from URL: ${dataUrl}`);
+                                const response = await axios.get(dataUrl, {
+                                    responseType: "arraybuffer",
+                                });
+                                const imageBuffer = Buffer.from(response.data, "binary");
+                                const base64Data = imageBuffer.toString("base64");
+                                let mimeType = response.headers["content-type"];
+                                if (!mimeType || mimeType === "application/octet-stream") {
+                                    mimeType = mime.lookup(dataUrl) || "image/jpeg"; // Fallback
+                                }
+                                googleParts.push({
+                                    inlineData: {
+                                        data: base64Data,
+                                        mimeType,
+                                    },
+                                });
+                                this.logger.info(`[Adapter] Successfully downloaded and converted image to base64.`);
+                            } catch (error) {
+                                this.logger.error(`[Adapter] Failed to download or process image from URL: ${dataUrl}`, error);
+                                // Optionally, push an error message as text
+                                googleParts.push({ text: `[System Note: Failed to load image from ${dataUrl}]` });
+                            }
                         }
                     }
                 }
