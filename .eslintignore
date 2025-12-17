@@ -15,11 +15,9 @@ tmp/
 # Config files
 configs/
 
-# Templates (HTML files only, not JS/CSS)
-ui/templates/*.html
-
 # Build outputs
 dist/
+ui/dist/
 build/
 ui/dist/
 
