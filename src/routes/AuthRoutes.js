@@ -1,5 +1,5 @@
 /**
- * File: src/routes/authRoutes.js
+ * File: src/routes/AuthRoutes.js
  * Description: Authentication routes for login and logout functionality
  *
  * Maintainers: iBenzene, bbbugg

@@ -12,11 +12,11 @@
             <div id="vnc-surface" />
             <div v-if="statusTitle" class="vnc-status" :class="`is-${statusTone}`">
                 <div class="vnc-status-card">
-                    <div class="vnc-status-title">
-                        {{ statusTitle }}
+                    <div class="vnc-status-title" :class="{ 'has-detail': statusDetail }">
+                        {{ statusTitleText }}
                     </div>
                     <!-- eslint-disable-next-line vue/no-v-html -->
-                    <div v-if="statusDetail" class="vnc-status-detail" v-html="statusDetail" />
+                    <div v-if="statusDetail" class="vnc-status-detail" v-html="statusDetailText" />
                     <button v-if="showReload" class="vnc-status-reload" type="button" @click="reloadPage">
                         {{ t("authReloadPage") }}
                     </button>
@@ -58,7 +58,6 @@
                 <button
                     class="vnc-bar-button"
                     type="button"
-                    :disabled="!isConnected"
                     :aria-label="t('switchLanguage')"
                     :title="t('switchLanguage')"
                     @click="toggleLanguage"
@@ -106,6 +105,31 @@
                         />
                         <path
                             d="M896 376v136c0 17.7-14.3 32-32 32H760c-4.4 0-8-3.6-8-8v-48c0-4.4 3.6-8 8-8h64c4.4 0 8-3.6 8-8v-96c0-4.4 3.6-8 8-8h48c4.4 0 8 3.6 8 8z"
+                        />
+                    </svg>
+                </button>
+                <button
+                    class="vnc-bar-button"
+                    type="button"
+                    :disabled="!isConnected"
+                    :aria-label="t('authSendEnter')"
+                    :title="t('authSendEnter')"
+                    @click="sendEnter"
+                >
+                    <svg
+                        t="1766081333596"
+                        class="icon"
+                        viewBox="0 0 1024 1024"
+                        version="1.1"
+                        xmlns="http://www.w3.org/2000/svg"
+                        p-id="7842"
+                        width="200"
+                        height="200"
+                    >
+                        <path
+                            d="M810.666667 213.333333a42.666667 42.666667 0 0 1 42.368 37.674667L853.333333 256v274.304c0 79.274667-50.944 147.498667-120.490666 152.106667L725.333333 682.666667H273.706667l97.792 97.834666a42.666667 42.666667 0 0 1-56.32 63.872l-4.010667-3.541333-170.666667-170.666667a42.666667 42.666667 0 0 1 0-60.330666l170.666667-170.666667a42.666667 42.666667 0 0 1 63.872 56.32l-3.541333 4.010667L273.706667 597.333333H725.333333c19.584 0 39.936-24.618667 42.410667-59.861333l0.256-7.168V256a42.666667 42.666667 0 0 1 42.666667-42.666667z"
+                            fill="#000000"
+                            p-id="7843"
                         />
                     </svg>
                 </button>
@@ -159,6 +183,7 @@
         </el-affix>
 
         <el-dialog
+            :key="`intro-${langVersion}`"
             v-model="showIntroDialog"
             class="vnc-dialog"
             :close-on-click-modal="false"
@@ -190,6 +215,7 @@
         </el-dialog>
 
         <el-dialog
+            :key="`text-${langVersion}`"
             v-model="showTextDialog"
             class="vnc-dialog"
             :title="t('authSendText')"
@@ -218,7 +244,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import I18n from "../utils/i18n";
 
@@ -237,7 +263,24 @@ const statusTone = ref("info");
 const textInput = ref("");
 const textInputRef = ref(null);
 
-const t = key => I18n.t(key, key);
+const t = key => {
+    langVersion.value; // Access to track language changes
+    return I18n.t(key, key);
+};
+
+const statusTitleText = computed(() => {
+    if (!statusTitle.value) return "";
+    return typeof statusTitle.value === "object" ? t(statusTitle.value.key) : statusTitle.value;
+});
+
+const statusDetailText = computed(() => {
+    if (!statusDetail.value) return "";
+    if (typeof statusDetail.value === "object") {
+        const translated = t(statusDetail.value.key);
+        return statusDetail.value.html ? statusDetail.value.html.replace("__TRANSLATED__", translated) : translated;
+    }
+    return statusDetail.value;
+});
 
 const toggleLanguage = async () => {
     await I18n.toggleLang();
@@ -311,9 +354,9 @@ const initializeVnc = () => {
 
     if (!vncContainer || !vncSurface) {
         setStatus({
-            detail: t("authVncContainerMissingDetail"),
+            detail: { key: "authVncContainerMissingDetail" },
             reload: true,
-            title: t("authVncContainerMissing"),
+            title: { key: "authVncContainerMissing" },
             tone: "error",
         });
         return;
@@ -325,7 +368,7 @@ const initializeVnc = () => {
 const isIntroDismissed = () => localStorage.getItem("vncIntroSkip") === "1";
 
 const loadVncClient = async (vncContainer, vncSurface) => {
-    setStatus({ title: t("authLoadingVnc") });
+    setStatus({ title: { key: "authLoadingVnc" } });
 
     let RFB;
     try {
@@ -335,15 +378,18 @@ const loadVncClient = async (vncContainer, vncSurface) => {
         console.error("Failed to load noVNC library:", error);
         const safeMessage = escapeHtml(error.message || error);
         setStatus({
-            detail: `${safeMessage}<div class="vnc-status-note">${t("authLoadVncFailedDetail")}</div>`,
+            detail: {
+                html: `${safeMessage}<div class="vnc-status-note">__TRANSLATED__</div>`,
+                key: "authLoadVncFailedDetail",
+            },
             reload: true,
-            title: t("authLoadVncFailed"),
+            title: { key: "authLoadVncFailed" },
             tone: "error",
         });
         return;
     }
 
-    setStatus({ title: t("authRequestingSession") });
+    setStatus({ title: { key: "authRequestingSession" } });
 
     try {
         const initialWidth = vncContainer.clientWidth;
@@ -393,9 +439,9 @@ const loadVncClient = async (vncContainer, vncSurface) => {
                 ? t("authSessionClosedNormally")
                 : detail.reason || t("authSessionClosedUnexpected");
             setStatus({
-                detail: `${t("authSessionClosedReason")} ${escapeHtml(reason)}`,
+                detail: { html: `__TRANSLATED__ ${escapeHtml(reason)}`, key: "authSessionClosedReason" },
                 reload: true,
-                title: t("authSessionClosed"),
+                title: { key: "authSessionClosed" },
                 tone: "neutral",
             });
         });
@@ -404,9 +450,9 @@ const loadVncClient = async (vncContainer, vncSurface) => {
             console.error("[VNC] Security failure:", e);
             isConnected.value = false;
             setStatus({
-                detail: t("authAuthFailedDetail"),
+                detail: { key: "authAuthFailedDetail" },
                 reload: true,
-                title: t("authAuthFailed"),
+                title: { key: "authAuthFailed" },
                 tone: "error",
             });
         });
@@ -417,9 +463,12 @@ const loadVncClient = async (vncContainer, vncSurface) => {
         console.error("Error starting VNC session:", error);
         const safeMessage = escapeHtml(error.message || error);
         setStatus({
-            detail: `${safeMessage}<div class="vnc-status-note">${t("authStartVncFailedDetail")}</div>`,
+            detail: {
+                html: `${safeMessage}<div class="vnc-status-note">__TRANSLATED__</div>`,
+                key: "authStartVncFailedDetail",
+            },
             reload: true,
-            title: t("authStartVncFailed"),
+            title: { key: "authStartVncFailed" },
             tone: "error",
         });
     }
@@ -505,6 +554,14 @@ const sendBackspace = () => {
     }
     rfb.value.sendKey(0xff08, "Backspace", true);
     rfb.value.sendKey(0xff08, "Backspace", false);
+};
+
+const sendEnter = () => {
+    if (!ensureConnected()) {
+        return;
+    }
+    rfb.value.sendKey(0xff0d, "Enter", true);
+    rfb.value.sendKey(0xff0d, "Enter", false);
 };
 
 const sendText = () => {
@@ -609,9 +666,13 @@ onBeforeUnmount(() => {
 }
 
 .vnc-status-title {
+    color: @vnc-overlay-text;
     font-size: 1.1rem;
     font-weight: 600;
-    margin-bottom: @spacing-sm;
+
+    &.has-detail {
+        margin-bottom: @spacing-sm;
+    }
 }
 
 .vnc-status-detail {
@@ -620,7 +681,7 @@ onBeforeUnmount(() => {
     line-height: 1.5;
 
     code {
-        background: rgba(255, 255, 255, 0.08);
+        background: @vnc-overlay-code-bg;
         border-radius: @border-radius-sm;
         font-family: @font-family-mono;
         padding: 2px 6px;

@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     unzip \
-    git \
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
@@ -48,21 +47,21 @@ RUN npm install --no-audit --no-fund --ignore-scripts \
 ARG CAMOUFOX_URL
 RUN ARCH=$(uname -m) && \
     if [ -z "$CAMOUFOX_URL" ]; then \
-        if [ "$ARCH" = "x86_64" ]; then \
-            CAMOUFOX_URL="https://github.com/daijro/camoufox/releases/download/v135.0.1-beta.24/camoufox-135.0.1-beta.24-lin.x86_64.zip"; \
-        elif [ "$ARCH" = "aarch64" ]; then \
-            CAMOUFOX_URL="https://github.com/daijro/camoufox/releases/download/v135.0.1-beta.24/camoufox-135.0.1-beta.24-lin.arm64.zip"; \
-        else \
-            echo "Unsupported architecture: $ARCH" && exit 1; \
-        fi; \
+    if [ "$ARCH" = "x86_64" ]; then \
+    CAMOUFOX_URL="https://github.com/daijro/camoufox/releases/download/v135.0.1-beta.24/camoufox-135.0.1-beta.24-lin.x86_64.zip"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+    CAMOUFOX_URL="https://github.com/daijro/camoufox/releases/download/v135.0.1-beta.24/camoufox-135.0.1-beta.24-lin.arm64.zip"; \
+    else \
+    echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi; \
     fi && \
     mkdir -p camoufox-linux && \
     curl -sSL ${CAMOUFOX_URL} -o camoufox.zip && \
     unzip -q camoufox.zip -d /tmp/cf || true && \
     if [ -f /tmp/cf/camoufox ]; then \
-        mv /tmp/cf/* camoufox-linux/; \
+    mv /tmp/cf/* camoufox-linux/; \
     else \
-        mv /tmp/cf/*/* camoufox-linux/; \
+    mv /tmp/cf/*/* camoufox-linux/; \
     fi && \
     rm -rf /tmp/cf camoufox.zip && \
     chmod +x /app/camoufox-linux/camoufox

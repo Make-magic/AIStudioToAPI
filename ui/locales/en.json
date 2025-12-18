@@ -33,6 +33,7 @@
     "authSaveSession": "Save session",
     "authSaveSuccess": "Account \"{accountName}\" saved successfully!",
     "authSend": "Send",
+    "authSendEnter": "Send Enter Key",
     "authSendText": "Send Text",
     "authSendTextPlaceholder": "Type text to send to the remote session",
     "authSessionClosed": "VNC session has been closed.",
