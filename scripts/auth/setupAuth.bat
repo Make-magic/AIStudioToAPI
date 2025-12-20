@@ -14,7 +14,7 @@ set "CAMOUFOX_ZIP=camoufox.zip"
 set "CAMOUFOX_DIR=camoufox"
 
 :: Navigate to project root
-cd /d "%~dp0\.."
+cd /d "%~dp0\..\.."
 
 :: Step 1: Check and install Node.js dependencies
 echo.[1/4] Checking Node.js dependencies...
@@ -34,54 +34,52 @@ echo.
 
 :: Step 2: Check Camoufox browser
 echo.[2/4] Checking Camoufox browser...
-if exist "%CAMOUFOX_DIR%\camoufox.exe" (
+if not exist "%CAMOUFOX_DIR%\camoufox.exe" (
+    echo.Downloading Camoufox v%CAMOUFOX_VERSION%...
+    echo.Download URL: %CAMOUFOX_URL%
+    echo.
+
+    :: Download file using PowerShell
+    powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Write-Host 'Downloading...' -ForegroundColor Cyan; Invoke-WebRequest -Uri '%CAMOUFOX_URL%' -OutFile '%CAMOUFOX_ZIP%' -UseBasicParsing; Write-Host 'Download complete' -ForegroundColor Green}"
+
+    if errorlevel 1 (
+        echo.ERROR: Download failed! Please check network connection or download manually
+        echo.Manual download URL: %CAMOUFOX_URL%
+        pause
+        exit /b 1
+    )
+
+    :: Step 3: Extract Camoufox
+    echo.
+    echo.[3/4] Extracting Camoufox...
+
+    :: Create camoufox directory if not exists
+    if not exist "%CAMOUFOX_DIR%" mkdir "%CAMOUFOX_DIR%"
+
+    :: Extract to camoufox directory
+    powershell -Command "& {Expand-Archive -Path '%CAMOUFOX_ZIP%' -DestinationPath '%CAMOUFOX_DIR%' -Force; Write-Host 'Extraction complete' -ForegroundColor Green}"
+
+    if errorlevel 1 (
+        echo.ERROR: Extraction failed!
+        pause
+        exit /b 1
+    )
+
+    :: Check if files were extracted to a subdirectory and move them up if needed
+    if exist "%CAMOUFOX_DIR%\camoufox-%CAMOUFOX_VERSION%-win.x86_64" (
+        echo.Moving files from subdirectory...
+        xcopy "%CAMOUFOX_DIR%\camoufox-%CAMOUFOX_VERSION%-win.x86_64\*" "%CAMOUFOX_DIR%\" /E /Y >nul 2>&1
+        rd /s /q "%CAMOUFOX_DIR%\camoufox-%CAMOUFOX_VERSION%-win.x86_64" >nul 2>&1
+    )
+
+    :: Delete zip file
+    del "%CAMOUFOX_ZIP%" >nul 2>&1
+    echo.Cleanup complete
+    echo.
+) else (
     echo.Camoufox exists, skipping download
-    goto :skip_download
+    echo.
 )
-
-echo.Downloading Camoufox v%CAMOUFOX_VERSION%...
-echo.Download URL: %CAMOUFOX_URL%
-echo.
-
-:: Download file using PowerShell
-powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Write-Host 'Downloading...' -ForegroundColor Cyan; Invoke-WebRequest -Uri '%CAMOUFOX_URL%' -OutFile '%CAMOUFOX_ZIP%' -UseBasicParsing; Write-Host 'Download complete' -ForegroundColor Green}"
-
-if errorlevel 1 (
-    echo.ERROR: Download failed! Please check network connection or download manually
-    echo.Manual download URL: %CAMOUFOX_URL%
-    pause
-    exit /b 1
-)
-
-:: Step 3: Extract Camoufox
-echo.
-echo.[3/4] Extracting Camoufox...
-
-:: Create camoufox directory if not exists
-if not exist "%CAMOUFOX_DIR%" mkdir "%CAMOUFOX_DIR%"
-
-:: Extract to camoufox directory
-powershell -Command "& {Expand-Archive -Path '%CAMOUFOX_ZIP%' -DestinationPath '%CAMOUFOX_DIR%' -Force; Write-Host 'Extraction complete' -ForegroundColor Green}"
-
-if errorlevel 1 (
-    echo.ERROR: Extraction failed!
-    pause
-    exit /b 1
-)
-
-:: Check if files were extracted to a subdirectory and move them up if needed
-if exist "%CAMOUFOX_DIR%\camoufox-%CAMOUFOX_VERSION%-win.x86_64" (
-    echo.Moving files from subdirectory...
-    xcopy "%CAMOUFOX_DIR%\camoufox-%CAMOUFOX_VERSION%-win.x86_64\*" "%CAMOUFOX_DIR%\" /E /Y >nul 2>&1
-    rd /s /q "%CAMOUFOX_DIR%\camoufox-%CAMOUFOX_VERSION%-win.x86_64" >nul 2>&1
-)
-
-:: Delete zip file
-del "%CAMOUFOX_ZIP%" >nul 2>&1
-echo.Cleanup complete
-echo.
-
-:skip_download
 
 :: Step 4: Run auth save script
 echo.[4/4] Starting auth save tool...
