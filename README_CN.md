@@ -127,10 +127,10 @@ sudo docker compose down
 - 登录您的 Google 账号，登录完成后点击「保存」按钮
 - 账号将自动保存为 `auth-N.json`（N 从 0 开始）
 
-**方法 2：上传认证文件（传统方式）**
+**方法 2：上传认证文件**
 
 - 在 Windows 机器上运行 `npm run setup-auth` 生成认证文件
-- 将 `auth-N.json` 文件（N 从 0 开始）上传到挂载的 `/path/to/auth` 目录
+- 通过浏览器在控制台直接上传 `auth-N.json` 文件（N 从 0 开始），或手动上传到挂载的 `/path/to/auth` 目录
 
 > ⚠ 目前暂不支持通过环境变量注入认证信息。
 

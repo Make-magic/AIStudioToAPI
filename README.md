@@ -127,10 +127,10 @@ After deployment, you need to add Google accounts using one of these methods:
 - Log in to your Google account, then click the "Save" button after login is complete
 - The account will be automatically saved as `auth-N.json` (N starts from 0)
 
-**Method 2: Upload Auth Files (Legacy)**
+**Method 2: Upload Auth Files**
 
 - Run `npm run setup-auth` on a Windows machine to generate auth files
-- Upload `auth-N.json` files (N starts from 0) to the mounted `/path/to/auth` directory
+- Upload `auth-N.json` files (N starts from 0) directly through the web console in your browser, or manually upload to the mounted `/path/to/auth` directory
 
 > ⚠ Environment variable-based auth injection is no longer supported.
 
