@@ -62,6 +62,9 @@ class ConfigLoader {
             config.forceUrlContext = process.env.FORCE_URL_CONTEXT.toLowerCase() === "true";
         if (process.env.ENABLE_AUTH_UPDATE)
             config.enableAuthUpdate = process.env.ENABLE_AUTH_UPDATE.toLowerCase() !== "false";
+        if (process.env.SSL_KEY_PATH) config.sslKeyPath = process.env.SSL_KEY_PATH;
+        if (process.env.SSL_CERT_PATH) config.sslCertPath = process.env.SSL_CERT_PATH;
+
 
         let rawCodes = process.env.IMMEDIATE_SWITCH_STATUS_CODES;
         let codesSource = "environment variable";
@@ -137,23 +140,23 @@ class ConfigLoader {
         this.logger.info(`  Force URL Context: ${config.forceUrlContext}`);
         this.logger.info(`  Auto Update Auth: ${config.enableAuthUpdate}`);
         this.logger.info(
-            `  Usage-based Switch Threshold: ${
-                config.switchOnUses > 0 ? `Switch after every ${config.switchOnUses} requests` : "Disabled"
+            `  Usage-based Switch Threshold: ${config.switchOnUses > 0 ? `Switch after every ${config.switchOnUses} requests` : "Disabled"
             }`
         );
         this.logger.info(
-            `  Failure-based Switch: ${
-                config.failureThreshold > 0 ? `Switch after ${config.failureThreshold} failures` : "Disabled"
+            `  Failure-based Switch: ${config.failureThreshold > 0 ? `Switch after ${config.failureThreshold} failures` : "Disabled"
             }`
         );
         this.logger.info(
-            `  Immediate Switch Status Codes: ${
-                config.immediateSwitchStatusCodes.length > 0 ? config.immediateSwitchStatusCodes.join(", ") : "Disabled"
+            `  Immediate Switch Status Codes: ${config.immediateSwitchStatusCodes.length > 0 ? config.immediateSwitchStatusCodes.join(", ") : "Disabled"
             }`
         );
         this.logger.info(`  Max Retries per Request: ${config.maxRetries} times`);
         this.logger.info(`  Retry Delay: ${config.retryDelay}ms`);
         this.logger.info(`  API Key Source: ${config.apiKeySource}`);
+        this.logger.info(
+            `  HTTPS Mode: ${config.sslKeyPath && config.sslCertPath ? "Enabled" : "Disabled"}`
+        );
         this.logger.info("=============================================================");
     }
 }
