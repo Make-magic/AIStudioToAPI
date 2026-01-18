@@ -1001,9 +1001,18 @@ class RequestHandler {
                     // So `value` is `http://localhost:xxxx/...&__proxy_host__=google.com` (from Browser)
                     // We just need to ensure it points to *our* current listener address.
 
-                    const serverHost = this.serverSystem.config.host === "0.0.0.0" ? "127.0.0.1" : this.serverSystem.config.host;
-                    const serverPort = this.serverSystem.config.httpPort;
-                    const newUrl = `http://${serverHost}:${serverPort}${urlObj.pathname}${urlObj.search}`;
+                    // Use the Host header from the request to support remote clients (e.g. Docker IPs)
+                    // If req.headers.host exists (standard), use it. Otherwise fallback to config.
+                    let newAuthority;
+                    if (req && req.headers && req.headers.host) {
+                        newAuthority = req.headers.host;
+                    } else {
+                        const host = this.serverSystem.config.host === "0.0.0.0" ? "127.0.0.1" : this.serverSystem.config.host;
+                        newAuthority = `${host}:${this.serverSystem.config.httpPort}`;
+                    }
+
+                    const protocol = req.secure || (req.get && req.get("X-Forwarded-Proto") === "https") ? "https" : "http";
+                    const newUrl = `${protocol}://${newAuthority}${urlObj.pathname}${urlObj.search}`;
 
                     this.logger.info(`[Response] Rewriting header ${name}: ${value} -> ${newUrl}`);
                     res.set(name, newUrl);

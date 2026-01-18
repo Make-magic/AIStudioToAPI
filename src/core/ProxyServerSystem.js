@@ -10,6 +10,8 @@ const { EventEmitter } = require("events");
 const express = require("express");
 const WebSocket = require("ws");
 const http = require("http");
+const https = require("https");
+const fs = require("fs");
 const net = require("net");
 const { URL } = require("url");
 
@@ -203,7 +205,29 @@ class ProxyServerSystem extends EventEmitter {
 
     async _startHttpServer() {
         const app = this._createExpressApp();
-        this.httpServer = http.createServer(app);
+
+        if (this.config.sslKeyPath && this.config.sslCertPath) {
+            try {
+                if (fs.existsSync(this.config.sslKeyPath) && fs.existsSync(this.config.sslCertPath)) {
+                    const options = {
+                        key: fs.readFileSync(this.config.sslKeyPath),
+                        cert: fs.readFileSync(this.config.sslCertPath),
+                    };
+                    this.httpServer = https.createServer(options, app);
+                    this.logger.info("[System] Starting in HTTPS mode...");
+                } else {
+                    this.logger.warn(
+                        "[System] SSL file paths provided but files not found. Falling back to HTTP."
+                    );
+                    this.httpServer = http.createServer(app);
+                }
+            } catch (error) {
+                this.logger.error(`[System] Failed to load SSL files: ${error.message}. Falling back to HTTP.`);
+                this.httpServer = http.createServer(app);
+            }
+        } else {
+            this.httpServer = http.createServer(app);
+        }
 
         this.httpServer.on("upgrade", (req, socket) => {
             const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
@@ -296,6 +320,7 @@ class ProxyServerSystem extends EventEmitter {
         app.use((req, res, next) => {
             res.header("Access-Control-Allow-Origin", "*");
             res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+            res.header("Access-Control-Allow-Private-Network", "true");
             res.header(
                 "Access-Control-Allow-Headers",
                 "Content-Type, Authorization, x-requested-with, x-api-key, x-goog-api-key, x-goog-api-client, x-user-agent," +
