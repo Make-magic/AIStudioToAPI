@@ -7,6 +7,21 @@
 
 /* eslint-env browser */
 
+const b64toBlob = (b64Data, contentType = "", sliceSize = 512) => {
+    const byteCharacters = atob(b64Data);
+    const byteArrays = [];
+    for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+        const slice = byteCharacters.slice(offset, offset + sliceSize);
+        const byteNumbers = new Array(slice.length);
+        for (let i = 0; i < slice.length; i++) {
+            byteNumbers[i] = slice.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        byteArrays.push(byteArray);
+    }
+    return new Blob(byteArrays, { type: contentType });
+};
+
 const Logger = {
     enabled: true,
     output(...messages) {
@@ -21,23 +36,6 @@ const Logger = {
         document.body.appendChild(logElement);
     },
 };
-
-// [Files API Support] Helper to convert Base64 to Blob
-function b64toBlob(b64Data, contentType = '', sliceSize = 512) {
-    const byteCharacters = atob(b64Data);
-    const byteArrays = [];
-    for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
-        const slice = byteCharacters.slice(offset, offset + sliceSize);
-        const byteNumbers = new Array(slice.length);
-        for (let i = 0; i < slice.length; i++) {
-            byteNumbers[i] = slice.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        byteArrays.push(byteArray);
-    }
-    return new Blob(byteArrays, { type: contentType });
-}
-
 
 class ConnectionManager extends EventTarget {
     // [BrowserManager Injection Point] Do not modify the line below.
@@ -175,31 +173,89 @@ class RequestProcessor {
     }
 
     _constructUrl(requestSpec) {
-        let pathSegment = requestSpec.path.startsWith("/") ? requestSpec.path.substring(1) : requestSpec.path;
-        const queryParams = new URLSearchParams(requestSpec.query_params);
+        let pathAndQuery = requestSpec.url;
 
-        if (requestSpec.streaming_mode === "fake") {
-            Logger.output("Buffered mode activated (Non-Stream / Fake-Stream), checking request details...");
-            if (pathSegment.includes(":streamGenerateContent")) {
-                pathSegment = pathSegment.replace(":streamGenerateContent", ":generateContent");
-                Logger.output(`API path modified to: ${pathSegment}`);
+        if (!pathAndQuery) {
+            const pathSegment = requestSpec.path || "";
+            const queryParams = new URLSearchParams(requestSpec.query_params);
+
+            // Handle fake streaming mode adjustments
+            if (requestSpec.streaming_mode === "fake") {
+                if (pathSegment.includes(":streamGenerateContent")) {
+                    // This is a bit risky if pathSegment is modified, but BuildProxy does it on the joined string
+                    // We'll follow BuildProxy structured approach but keep this feature
+                }
+                if (queryParams.has("alt") && queryParams.get("alt") === "sse") {
+                    queryParams.delete("alt");
+                }
             }
-            if (queryParams.has("alt") && queryParams.get("alt") === "sse") {
-                queryParams.delete("alt");
-                Logger.output('Removed "alt=sse" query parameter.');
+
+            // Special handling for legacy path construction if url not provided
+            let finalPath = pathSegment;
+            if (requestSpec.streaming_mode === "fake" && finalPath.includes(":streamGenerateContent")) {
+                finalPath = finalPath.replace(":streamGenerateContent", ":generateContent");
+            }
+
+            const queryString = queryParams.toString();
+            pathAndQuery = `${finalPath}${queryString ? "?" + queryString : ""}`;
+        }
+
+        // Rewriting absolute URLs (if provided)
+        if (pathAndQuery.match(/^https?:\/\//)) {
+            try {
+                const urlObj = new URL(pathAndQuery);
+                const originalUrl = pathAndQuery;
+                pathAndQuery = urlObj.pathname + urlObj.search;
+                Logger.output(`Rewriting absolute URL: ${originalUrl} -> ${pathAndQuery}`);
+            } catch (e) {
+                Logger.output("URL parsing warning:", e.message);
             }
         }
 
-        // [Files API Support] Dynamic Host Switching
         let targetHost = this.targetDomain;
-        if (queryParams.has("__proxy_host__")) {
-            targetHost = queryParams.get("__proxy_host__");
-            queryParams.delete("__proxy_host__");
-            Logger.output(`[Files API] Switching target host to: ${targetHost}`);
+        if (pathAndQuery.includes("__proxy_host__=")) {
+            try {
+                const tempUrl = new URL(pathAndQuery, "http://dummy");
+                const params = tempUrl.searchParams;
+                if (params.has("__proxy_host__")) {
+                    targetHost = params.get("__proxy_host__");
+                    params.delete("__proxy_host__");
+                    pathAndQuery = tempUrl.pathname + tempUrl.search;
+                    Logger.output(`Dynamically switching target host: ${targetHost}`);
+                }
+            } catch (e) {
+                Logger.output("Failed to parse proxy host:", e.message);
+            }
         }
 
-        const queryString = queryParams.toString();
-        return `https://${targetHost}/${pathSegment}${queryString ? "?" + queryString : ""}`;
+        let cleanPath = pathAndQuery.replace(/^\/+/, "");
+        const method = requestSpec.method ? requestSpec.method.toUpperCase() : "GET";
+
+        if (this.targetDomain.includes("generativelanguage")) {
+            const versionRegex = /v1[a-z0-9]*\/files/;
+            const uploadMatch = cleanPath.match(new RegExp(`upload\/${versionRegex.source}`));
+
+            if (uploadMatch) {
+                // If path already contains upload/, just ensure it's correct
+                const index = cleanPath.indexOf("upload/");
+                if (index > 0) {
+                    const fixedPath = cleanPath.substring(index);
+                    Logger.output(`Corrected path: ${cleanPath} -> ${fixedPath}`);
+                    cleanPath = fixedPath;
+                }
+            } else if (method === "POST") {
+                // Detect if it starts with version and 'files', e.g. v1beta/files
+                const filesPathMatch = cleanPath.match(new RegExp(`^${versionRegex.source}`));
+                if (filesPathMatch) {
+                    cleanPath = "upload/" + cleanPath;
+                    Logger.output("Auto-completing upload path:", cleanPath);
+                }
+            }
+        }
+
+        const finalUrl = `https://${targetHost}/${cleanPath}`;
+        Logger.output(`Constructed URL: ${pathAndQuery} -> ${finalUrl}`);
+        return finalUrl;
     }
 
     _generateRandomString(length) {
@@ -217,13 +273,13 @@ class RequestProcessor {
         };
 
         if (["POST", "PUT", "PATCH"].includes(requestSpec.method)) {
-            // [Files API Support] Handle Blob body (converted from Base64)
-            if (requestSpec.body instanceof Blob) {
-                config.body = requestSpec.body;
+            if (!requestSpec.is_generative && requestSpec.body_b64) {
+                const contentType = requestSpec.headers?.["content-type"] || "";
+                config.body = b64toBlob(requestSpec.body_b64, contentType);
+                Logger.output("Using binary body (Base64 decoded) for non-generative request");
             } else if (requestSpec.body) {
                 try {
                     const bodyObj = JSON.parse(requestSpec.body);
-
 
                     // --- Module 1: Image/Embedding/TTS Model Filtering ---
                     // These models do NOT support: tools, thinkingConfig, systemInstruction, response_mime_type
@@ -334,17 +390,20 @@ class RequestProcessor {
 
     _sanitizeHeaders(headers) {
         const sanitized = { ...headers };
-        [
+        // Follow BuildProxy's forbidden list exactly
+        const forbiddenHeaders = [
             "host",
             "connection",
             "content-length",
-            "origin",
+            /* 'origin', */ // BuildProxy comments these out
             "referer",
             "user-agent",
             "sec-fetch-mode",
             "sec-fetch-site",
             "sec-fetch-dest",
-        ].forEach(h => delete sanitized[h]);
+        ];
+
+        forbiddenHeaders.forEach(h => delete sanitized[h]);
         return sanitized;
     }
 
@@ -356,7 +415,7 @@ class RequestProcessor {
             controller.abort();
         }
     }
-} // <--- Critical! Ensure this bracket exists
+}
 
 class ProxySystem extends EventTarget {
     constructor(websocketEndpoint) {
@@ -384,14 +443,6 @@ class ProxySystem extends EventTarget {
         this.connectionManager.addEventListener("disconnected", () => this.requestProcessor.cancelAllOperations());
     }
 
-    // [Files API Support] Store current proxy host
-    get currentProxyHost() {
-        return this._currentProxyHost;
-    }
-    set currentProxyHost(host) {
-        this._currentProxyHost = host;
-    }
-
     async _handleIncomingMessage(messageData) {
         let requestSpec = {};
         try {
@@ -400,26 +451,11 @@ class ProxySystem extends EventTarget {
             // --- Core modification: Dispatch tasks based on event_type ---
             switch (requestSpec.event_type) {
                 case "cancel_request":
-                    Logger.output(`[Debug] Received cancel_request for #${requestSpec.request_id}`);
                     // If it's a cancel instruction, call the cancel method
                     this.requestProcessor.cancelOperation(requestSpec.request_id);
                     break;
                 default:
                     // Default case, treat as proxy request
-                    // [Files API Support] Handle body_b64 conversion
-                    Logger.output(`[Debug] Processing Proxy Request #${requestSpec.request_id || "unknown"}`);
-                    if (requestSpec.body_b64) {
-                        Logger.output(`[Debug] Found body_b64 (${requestSpec.body_b64.length} chars)`);
-                        const contentType = requestSpec.headers?.['content-type'] || '';
-                        requestSpec.body = b64toBlob(requestSpec.body_b64, contentType);
-                        delete requestSpec.body_b64;
-                        Logger.output("[Files API] Converted Base64 body to Blob.");
-                    } else if (requestSpec.body) {
-                        Logger.output(`[Debug] Found text body (${requestSpec.body.length} chars)`);
-                    } else {
-                        Logger.output(`[Debug] No body found`);
-                    }
-
                     // [Final Optimization] Display path directly, no longer display mode as path itself is clear enough
                     Logger.output(`Received request: ${requestSpec.method} ${requestSpec.path}`);
 
@@ -441,15 +477,6 @@ class ProxySystem extends EventTarget {
         const operationId = requestSpec.request_id;
         const mode = requestSpec.streaming_mode || "fake";
         Logger.output(`Browser received request`);
-
-        // [Files API Support] Capture Proxy Host from headers
-        if (requestSpec.headers) {
-            const hostKey = Object.keys(requestSpec.headers).find(k => k.toLowerCase() === 'host');
-            if (hostKey) {
-                this.currentProxyHost = requestSpec.headers[hostKey];
-            }
-        }
-
         let cancelTimeout;
 
         try {
@@ -463,9 +490,12 @@ class ProxySystem extends EventTarget {
                 throw new DOMException("The user aborted a request.", "AbortError");
             }
 
-            this._transmitHeaders(response, operationId);
+            this._transmitHeaders(response, operationId, requestSpec.headers?.host);
             const reader = response.body.getReader();
             const textDecoder = new TextDecoder();
+            const contentType = response.headers.get("content-type") || "";
+            const isText = contentType.includes("text/") || contentType.includes("application/json");
+
             let fullBody = "";
 
             // --- Core modification: Correctly dispatch streaming and non-streaming data inside the loop ---
@@ -479,21 +509,23 @@ class ProxySystem extends EventTarget {
 
                 cancelTimeout();
 
-                const chunk = textDecoder.decode(value, { stream: true });
-
-                if (mode === "real") {
-                    // Streaming mode: immediately forward each data chunk
-                    this._transmitChunk(chunk, operationId);
+                if (isText) {
+                    const chunk = textDecoder.decode(value, { stream: true });
+                    if (mode === "real") {
+                        this._transmitChunk(chunk, operationId);
+                    } else {
+                        fullBody += chunk;
+                    }
                 } else {
-                    // fake mode
-                    // Non-streaming mode: concatenate data chunks, wait to forward all at once at the end
-                    fullBody += chunk;
+                    // Binary data: use Base64 to ensure WebSocket safety
+                    const base64Chunk = btoa(String.fromCharCode(...value));
+                    this._transmitChunk(base64Chunk, operationId, true); // true = isBinary
                 }
             }
 
             Logger.output("Data stream read complete.");
 
-            if (mode === "fake") {
+            if (mode === "fake" && isText) {
                 // In non-streaming mode, after loop ends, forward the concatenated complete response body
                 this._transmitChunk(fullBody, operationId);
             }
@@ -515,100 +547,19 @@ class ProxySystem extends EventTarget {
         }
     }
 
-    _transmitHeaders(response, operationId) {
+    _transmitHeaders(response, operationId, proxyHost) {
         const headerMap = {};
         response.headers.forEach((v, k) => {
-            // [Files API Support] Rewrite x-goog-upload-url and location to include __proxy_host__
-            // This is critical for the second step of the upload process (PUT to storage.googleapis.com)
             const lowerKey = k.toLowerCase();
-            if ((lowerKey === 'location' || lowerKey === 'x-goog-upload-url') && v.includes('googleapis.com')) {
+            if ((lowerKey === "location" || lowerKey === "x-goog-upload-url") && v.includes("googleapis.com")) {
                 try {
                     const urlObj = new URL(v);
-                    // Use the current proxy host (which this script is running on via websocket) if we knew it?
-                    // Actually, the server will rewrite the domain part.
-                    // We just need to ensure the __proxy_host__ param is added so the server knows where to route next.
-
-                    // Important: The SERVER (RequestHandler/ProxySystem) handles the domain rewrite to localhost.
-                    // BUT, we need to inject the original host into the query params so the server can put it back
-                    // when the next request comes in.
-
-                    // Wait, in BuildProxy's cloud-server, it modifies the URL value directly and sends it back.
-                    // Here, we are sending headers back to the local server via WebSocket.
-
-                    // In BuildProxy implementation: 
-                    // headerMap[key] = newUrl; (Logic: http://127.0.0.1:8889/...&__proxy_host__=storage...)
-
-                    // However, AIStudioToAPI's RequestHandler doesn't seem to have the logic yet to rewrite 
-                    // response headers returned from the browser (ConnectionRegistry checks for message type response_headers).
-                    // Let's check ProxySystem/RequestHandler again? 
-                    // RequestHandler._setResponseHeaders just copies them.
-
-                    // So we must do the rewriting HERE in the browser, assuming we know the proxy address?
-                    // OR we send the original Google URL, and the RequestHandler rewrites it?
-                    // In BuildProxy, local-server.cjs rewrites it partially?
-                    // No, BuildProxy local-server.cjs line 319: checks x-goog-upload-url and rewrites it to localhost
-                    // taking path from originalUrl. 
-                    // BUT it doesn't seem to add __proxy_host__ there.
-
-                    // Let's re-read BuildProxy cloud-client.tsx carefully.
-                    // Line 338: const newSearch = `${urlObj.search}${separator}__proxy_host__=${urlObj.host}`;
-                    // Line 340: const newUrl = `http://${host}${urlObj.pathname}${newSearch}`;
-                    // So the browser script does the full rewrite!
-
-                    // Problem: This script doesn't know the user's Local Proxy IP/Port easily. 
-                    // BuildProxy defaults to 127.0.0.1:8889.
-                    // Ideally, we shouldn't hardcode it.
-
-                    // Alternative: Just append `__proxy_host__` to the search params of the Google URL, 
-                    // and let the RequestHandler (server-side) do the domain rewrite to localhost.
-                    // The RequestHandler runs on the local server, so it knows its own address.
-
-                    // Let's modify the plan slightly:
-                    // 1. Browser: Append `__proxy_host__=<real_host>` to any googleapis URL in location/upload-url.
-                    // 2. Browser: Leave the domain as googleapis.com for now? 
-                    // If we leave it as googleapis.com, the client (using the proxy) might try to connect to google directly?
-                    // Yes, the client needs a localhost URL.
-
-                    // So RequestHandler MUST rewrite the domain to localhost.
-                    // If Browser appends `__proxy_host__`, RequestHandler will see: `https://storage.googleapis.com/...?__proxy_host__=storage...`
-                    // RequestHandler needs to change `https://storage.googleapis.com/...` to `http://localhost:port/...`.
-
-                    // Let's check RequestHandler._setResponseHeaders again.
-                    // It just does `res.set(name, value)`.
-
-                    // So we DO need to modify RequestHandler to rewrite the domain.
-                    // AND we need the Browser to append the `__proxy_host__`.
-
-                    // Wait, better approach:
-                    // Let the Browser rewrite the URL to a relative path / special format?
-                    // Or follow BuildProxy: Browser does it all. 
-                    // But Browser needs `proxyHost`.
-                    // In BuildProxy, cloud-client.tsx receives `proxyHost` from the request headers (Host header) of the previous request!
-                    // See line 458 in cloud-client.tsx: `if (hostKey) proxyHost = requestSpec.headers[hostKey];`
-
-                    // We can implement that! 
-                    // 1. Extract `Host` header in `_handleIncomingMessage` or `_processProxyRequest`.
-                    // 2. Pass it to `_transmitHeaders`.
-
-                    // Let's update `_processProxyRequest` to capture host first.
-
-                    const separator = urlObj.search ? '&' : '?';
+                    const host = proxyHost || location.host;
+                    const separator = urlObj.search ? "&" : "?";
                     const newSearch = `${urlObj.search}${separator}__proxy_host__=${urlObj.host}`;
-
-                    // We'll use a placeholder for now if we don't have the proxy host, 
-                    // or we can rely on RequestHandler to fix the domain if we send a special marker.
-                    // But implementing the "extract host" strategy is best.
-
-                    // For now, let's inject the param. We'll update the domain to a placeholder 
-                    // that RequestHandler can interpret or, if we implement the Host capture, use that.
-
-                    // Let's assume we can get the host. 
-                    // Accessing `this.currentProxyHost` (we need to store it).
-                    const host = this.currentProxyHost || '127.0.0.1:8889';
-                    const newUrl = `http://${host}${urlObj.pathname}${newSearch}`;
+                    const newUrl = `${location.protocol}//${host}${urlObj.pathname}${newSearch}`;
                     headerMap[k] = newUrl;
-
-                    Logger.output(`[Files API] Rewrote ${k}: ${newUrl}`);
+                    Logger.output(`Rewriting header ${k}: ${v} -> ${headerMap[k]}`);
                 } catch (e) {
                     headerMap[k] = v;
                 }
@@ -624,12 +575,13 @@ class ProxySystem extends EventTarget {
         });
     }
 
-    _transmitChunk(chunk, operationId) {
-        if (!chunk) return;
+    _transmitChunk(data, operationId, isBinary = false) {
+        if (!data) return;
         this.connectionManager.transmit({
-            data: chunk,
+            data: data,
             event_type: "chunk",
             request_id: operationId,
+            is_binary: isBinary,
         });
     }
 
