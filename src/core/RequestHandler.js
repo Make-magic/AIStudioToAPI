@@ -248,37 +248,6 @@ class RequestHandler {
     async processRequest(req, res) {
         const requestId = this._generateRequestId();
 
-        // [Debug] Log request details
-        this.logger.info(`[Debug] Processing request: ${req.method} ${req.path}`);
-        this.logger.info(`[Debug] Content-Type: ${req.headers["content-type"]}`);
-        this.logger.info(`[Debug] req.body keys: ${Object.keys(req.body || {}).length}`);
-
-        // [Files API Support] Handle binary body reading if not parsed by express.json
-        let rawBody = null;
-        if (
-            (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") &&
-            Object.keys(req.body || {}).length === 0
-        ) {
-            this.logger.info("[Debug] req.body is empty, attempting to read raw stream...");
-            try {
-                // Read stream
-                const chunks = [];
-                for await (const chunk of req) {
-                    chunks.push(chunk);
-                }
-                if (chunks.length > 0) {
-                    rawBody = Buffer.concat(chunks);
-                    this.logger.info(`[Debug] Read raw body: ${rawBody.length} bytes`);
-                } else {
-                    this.logger.info("[Debug] Raw stream was empty");
-                }
-            } catch (err) {
-                this.logger.error(`[Request] Failed to read raw body: ${err.message}`);
-            }
-        } else {
-            this.logger.info("[Debug] req.body present, skipping raw stream reading");
-        }
-
         // Check browser connection
         if (!this.connectionRegistry.hasActiveConnections()) {
             const recovered = await this._handleBrowserRecovery(res);
@@ -336,7 +305,8 @@ class RequestHandler {
             }
         });
 
-        const proxyRequest = this._buildProxyRequest(req, requestId, rawBody);
+        this.logger.info(`[Request] Incoming ${req.method} ${req.path} (ID: ${requestId})`);
+        const proxyRequest = this._buildProxyRequest(req, requestId);
         proxyRequest.is_generative = isGenerativeRequest;
         const messageQueue = this.connectionRegistry.createMessageQueue(requestId);
 
@@ -352,11 +322,11 @@ class RequestHandler {
                 if (this.serverSystem.streamingMode === "fake") {
                     await this._handlePseudoStreamResponse(proxyRequest, messageQueue, req, res);
                 } else {
-                    await this._handleRealStreamResponse(proxyRequest, messageQueue, res);
+                    await this._handleRealStreamResponse(proxyRequest, messageQueue, req, res);
                 }
             } else {
                 proxyRequest.streaming_mode = "fake";
-                await this._handleNonStreamResponse(proxyRequest, messageQueue, res);
+                await this._handleNonStreamResponse(proxyRequest, messageQueue, req, res);
             }
         } catch (error) {
             this._handleRequestError(error, res);
@@ -720,7 +690,7 @@ class RequestHandler {
         }
     }
 
-    async _handleRealStreamResponse(proxyRequest, messageQueue, res) {
+    async _handleRealStreamResponse(proxyRequest, messageQueue, req, res) {
         this.logger.info(`[Request] Request dispatched to browser for processing...`);
         this._forwardRequest(proxyRequest);
         const headerMessage = await messageQueue.dequeue();
@@ -746,7 +716,7 @@ class RequestHandler {
             this.authSwitcher.failureCount = 0;
         }
 
-        this._setResponseHeaders(res, headerMessage);
+        this._setResponseHeaders(res, headerMessage, req);
         this.logger.info("[Request] Starting streaming transmission...");
         try {
             let lastChunk = "";
@@ -759,8 +729,11 @@ class RequestHandler {
                     break;
                 }
                 if (dataMessage.data) {
-                    res.write(dataMessage.data);
-                    lastChunk = dataMessage.data;
+                    const writeData = dataMessage.is_binary
+                        ? Buffer.from(dataMessage.data, "base64")
+                        : dataMessage.data;
+                    res.write(writeData);
+                    if (!dataMessage.is_binary) lastChunk = dataMessage.data;
                 }
             }
             try {
@@ -788,7 +761,7 @@ class RequestHandler {
         }
     }
 
-    async _handleNonStreamResponse(proxyRequest, messageQueue, res) {
+    async _handleNonStreamResponse(proxyRequest, messageQueue, req, res) {
         this.logger.info(`[Request] Entering non-stream processing mode...`);
 
         try {
@@ -814,7 +787,7 @@ class RequestHandler {
             }
 
             const headerMessage = result.message;
-            let fullBody = "";
+            const chunks = [];
             let receiving = true;
             while (receiving) {
                 const message = await messageQueue.dequeue(300000);
@@ -824,12 +797,17 @@ class RequestHandler {
                     break;
                 }
                 if (message.event_type === "chunk" && message.data) {
-                    fullBody += message.data;
+                    const chunkBuffer = message.is_binary
+                        ? Buffer.from(message.data, "base64")
+                        : Buffer.from(message.data);
+                    chunks.push(chunkBuffer);
                 }
             }
 
+            const fullBodyBuffer = Buffer.concat(chunks);
+
             try {
-                const fullResponse = JSON.parse(fullBody);
+                const fullResponse = JSON.parse(fullBodyBuffer.toString());
                 const finishReason = fullResponse.candidates?.[0]?.finishReason || "UNKNOWN";
                 this.logger.info(
                     `✅ [Request] Response ended, reason: ${finishReason}, request ID: ${proxyRequest.request_id}`
@@ -838,9 +816,8 @@ class RequestHandler {
                 // Ignore JSON parsing errors for finish reason
             }
 
-            res.status(headerMessage.status || 200)
-                .type("application/json")
-                .send(fullBody || "{}");
+            this._setResponseHeaders(res, headerMessage, req);
+            res.send(fullBodyBuffer);
 
             this.logger.info(`[Request] Complete non-stream response sent to client.`);
         } catch (error) {
@@ -994,11 +971,48 @@ class RequestHandler {
         }
     }
 
-    _setResponseHeaders(res, headerMessage) {
+    _setResponseHeaders(res, headerMessage, req) {
         res.status(headerMessage.status || 200);
         const headers = headerMessage.headers || {};
+
+        // Filter headers that might cause CORS conflicts
+        const forbiddenHeaders = [
+            "access-control-allow-origin",
+            "access-control-allow-methods",
+            "access-control-allow-headers",
+        ];
+
         Object.entries(headers).forEach(([name, value]) => {
-            if (name.toLowerCase() !== "content-length") res.set(name, value);
+            const lowerName = name.toLowerCase();
+            if (forbiddenHeaders.includes(lowerName)) return;
+            if (lowerName === "content-length") return;
+
+            // Special handling for upload URL and redirects: point them back to this proxy
+            if ((lowerName === "x-goog-upload-url" || lowerName === "location") && value.includes("googleapis.com")) {
+                try {
+                    const urlObj = new URL(value);
+                    // Construct local proxy URL using configured host/port
+                    // Note: The client (build.js) might have already embedded the original host in __proxy_host__
+                    // But wait, headerMessage comes from the BROWSER.
+                    // If the Browser sends back the header as received from Google, then it's the GOOGLE URL.
+                    // If the Browser rewrote it, it's the LOCALHOST URL.
+                    // build.js `_transmitHeaders` rewrites it!
+
+                    // So `value` is `http://localhost:xxxx/...&__proxy_host__=google.com` (from Browser)
+                    // We just need to ensure it points to *our* current listener address.
+
+                    const serverHost = this.serverSystem.config.host === "0.0.0.0" ? "127.0.0.1" : this.serverSystem.config.host;
+                    const serverPort = this.serverSystem.config.httpPort;
+                    const newUrl = `http://${serverHost}:${serverPort}${urlObj.pathname}${urlObj.search}`;
+
+                    this.logger.info(`[Response] Rewriting header ${name}: ${value} -> ${newUrl}`);
+                    res.set(name, newUrl);
+                } catch (e) {
+                    res.set(name, value);
+                }
+            } else {
+                res.set(name, value);
+            }
         });
     }
 
@@ -1056,16 +1070,10 @@ class RequestHandler {
         }
     }
 
-    _buildProxyRequest(req, requestId, rawBody = null) {
+    _buildProxyRequest(req, requestId) {
         const fullPath = req.path;
         let cleanPath = fullPath.replace(/^\/proxy/, "");
         const bodyObj = req.body;
-
-        // [Files API Support] Handle Base64 encoding for binary bodies
-        let body_b64 = undefined;
-        if (rawBody) {
-            body_b64 = rawBody.toString("base64");
-        }
 
         // Parse thinkingLevel suffix from model name in native Gemini generation requests
         // Only handle generation requests: /v1beta/models/{modelName}:generateContent or :streamGenerateContent
@@ -1189,15 +1197,15 @@ class RequestHandler {
         }
 
         return {
-            // Priority: body_b64 (Binary) > bodyObj (JSON)
-            body: !body_b64 && req.method !== "GET" ? JSON.stringify(bodyObj) : undefined,
-            body_b64: body_b64,
+            body: req.method !== "GET" ? JSON.stringify(bodyObj) : undefined,
             headers: req.headers,
             method: req.method,
             path: cleanPath,
             query_params: req.query || {},
             request_id: requestId,
             streaming_mode: this.serverSystem.streamingMode,
+            body_b64: req.rawBody ? req.rawBody.toString("base64") : undefined,
+            is_generative: req.method === "POST" && (req.path.includes("generateContent") || req.path.includes("streamGenerateContent")),
         };
     }
 
